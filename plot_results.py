@@ -263,18 +263,26 @@ def draw_obstacles(ax, obstacles):
 
 
 def draw_disturbance_arrow(ax, magnitude, direction_deg):
-    """Dibuja una flecha con la direccion de la perturbacion externa."""
+    """Dibuja la flecha y el recuadro de corriente de agua abajo a la izquierda."""
     x_limits = ax.get_xlim()
     y_limits = ax.get_ylim()
     x_span = x_limits[1] - x_limits[0]
     y_span = y_limits[1] - y_limits[0]
-    arrow_length = 0.18 * min(x_span, y_span)
+    arrow_length = 0.11 * min(x_span, y_span)
 
     direction_rad = np.deg2rad(direction_deg)
     dx = arrow_length * np.cos(direction_rad)
     dy = arrow_length * np.sin(direction_rad)
-    x0 = x_limits[0] + 0.12 * x_span
-    y0 = y_limits[1] - 0.16 * y_span
+
+    # Ubicacion abajo a la izquierda (en la esquina inferior izquierda libre)
+    box_x = x_limits[0] + 0.03 * x_span
+    box_y = y_limits[0] + 0.03 * y_span
+
+    # Punto central de la flecha ligeramente a la derecha del recuadro de texto
+    arrow_cx = x_limits[0] + 0.28 * x_span
+    arrow_cy = y_limits[0] + 0.095 * y_span
+    x0 = arrow_cx - 0.5 * dx
+    y0 = arrow_cy - 0.5 * dy
 
     ax.annotate(
         "",
@@ -282,41 +290,50 @@ def draw_disturbance_arrow(ax, magnitude, direction_deg):
         xytext=(x0, y0),
         arrowprops={
             "arrowstyle": "->",
-            "color": "tab:purple",
-            "linewidth": 2.0,
+            "color": "#0284C7",
+            "linewidth": 2.2,
         },
+        zorder=7,
     )
     ax.text(
-        x0,
-        y0 - 0.06 * y_span,
-        f"disturbance: {magnitude:.1f} @ {direction_deg:.0f} deg",
-        color="tab:purple",
-        fontsize=9,
+        box_x,
+        box_y,
+        f"Water Current\nMagnitude: {magnitude:.0f} N\nAngle: {direction_deg:.0f}°",
+        color="#0369A1",
+        fontsize=8.5,
         ha="left",
-        va="top",
+        va="bottom",
         bbox={
-            "boxstyle": "round,pad=0.25",
+            "boxstyle": "round,pad=0.35",
             "facecolor": "white",
-            "edgecolor": "tab:purple",
-            "alpha": 0.85,
+            "edgecolor": "#0284C7",
+            "alpha": 0.92,
         },
+        zorder=7,
     )
 
 
 def plot_disturbance(t, state, disturbance_fun):
-    """Grafica la perturbacion aditiva d(t) = [dTu, dTv, dTr]."""
+    """Grafica la fuerza de corriente de agua proyectada en el cuerpo [Tu, Tv, Tr]."""
     disturbance = np.array([
         disturbance_fun(ti, state_i)
         for ti, state_i in zip(t, state)
     ])
 
     fig, ax = plt.subplots()
-    ax.plot(t, disturbance[:, 0], label="dTu")
-    ax.plot(t, disturbance[:, 1], label="dTv")
-    ax.plot(t, disturbance[:, 2], label="dTr")
+    ax.plot(t, disturbance[:, 0], label="Current Surge Force (body X) [N]")
+    ax.plot(t, disturbance[:, 1], label="Current Sway Force (body Y) [N]")
+    ax.plot(t, disturbance[:, 2], label="Current Yaw Moment (body Z) [N m]")
     ax.set_xlabel("t [s]")
-    ax.set_ylabel("disturbance")
-    ax.set_title("Additive Disturbances")
+    ax.set_ylabel("water current force in body frame")
+    info = getattr(disturbance_fun, "info", None)
+    if info is not None:
+        ax.set_title(
+            f"Water Current Projected to Body Frame "
+            f"(Magnitude: {info['magnitude']:.0f} N, Angle: {info['direction_deg']:.0f}°)"
+        )
+    else:
+        ax.set_title("Water Current Forces in Body Frame")
     ax.legend()
     ax.grid(True)
 
@@ -585,6 +602,7 @@ def save_simulation_animation(
     cbf_margin=CBF_MARGIN,
     governor_history_data=None,
     lookahead_L=TRACKING_LOOKAHEAD,
+    disturbance_info=None,
 ):
     """Guarda una animacion del movimiento del USV PlaDyPos y su referencia."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -729,6 +747,13 @@ def save_simulation_animation(
         },
     )
     ax.legend(loc="upper right", fontsize=8.5)
+
+    if disturbance_info is not None:
+        draw_disturbance_arrow(
+            ax,
+            magnitude=disturbance_info["magnitude"],
+            direction_deg=disturbance_info["direction_deg"],
+        )
 
     def update(frame_index):
         index = frame_indices[frame_index]
@@ -932,10 +957,18 @@ def plot_results(
     )
 
     ax.axis("equal")
+    x_pad = 0.08 * max(np.ptp(x), 1.0)
+    y_pad_top = 0.10 * max(np.ptp(y), 1.0)
+    y_pad_bottom = 0.22 * max(np.ptp(y), 1.0)
+    ax.set_xlim(np.min(x) - x_pad, np.max(x) + x_pad)
+    ax.set_ylim(np.min(y) - y_pad_bottom, np.max(y) + y_pad_top)
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
     ax.set_title("PlaDyPos Omnidirectional USV Trajectory with Heading")
     ax.grid(True)
+
+    if disturbance_info is None and disturbance_fun is not None:
+        disturbance_info = getattr(disturbance_fun, "info", None)
 
     if disturbance_info is not None:
         draw_disturbance_arrow(

@@ -26,6 +26,7 @@ from controllers import (
     smc_figure_eight,
 )
 from disturbances import (
+    INERTIAL_DISTURBANCE_CASES,
     combined_disturbance,
     constant_disturbance,
     directional_force_disturbance,
@@ -61,11 +62,22 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 CSV_PATH = DATA_DIR / "figure_eight_simulation.csv"
 FIGURES_DIR = DATA_DIR / "figures"
 ANIMATION_PATH = FIGURES_DIR / "Trayectory_animation.gif"
+DISTURBANCES_FIGURES_DIR = DATA_DIR / "figures_disturbances"
+
 DT = 0.02
 SHOW_PLOTS = False
 SAVE_ANIMATION = True
 ANIMATION_FPS = 25
 ANIMATION_DURATION = 20.0
+
+# ============================================================
+# Bandera principal de ejecucion:
+#   - INCLUDE_DISTURBANCES = False -> Corre solo la simulacion ideal (sin perturbaciones)
+#   - INCLUDE_DISTURBANCES = True  -> Corre la simulacion ideal + las 4 simulaciones
+#                                     con fuerzas constantes en el marco inercial
+# ============================================================
+INCLUDE_DISTURBANCES = True
+
 ENABLE_OBSTACLES = False
 LOOKAHEAD_L = TRACKING_LOOKAHEAD
 ENABLE_CBF_AVOIDANCE = False
@@ -87,9 +99,10 @@ REFERENCE_GAMMA_FILTER_TAU_MAX = GOVERNOR_FILTER_TAU_MAX
 
 DISTURBANCE_OPTIONS = {
     "none": no_disturbance,
+    **INERTIAL_DISTURBANCE_CASES,
     "wind": wind_like_disturbance,
     "directional": directional_force_disturbance(
-        magnitude=25.0,
+        magnitude=15.0,
         direction_deg=45.0,
     ),
     "constant": constant_disturbance(
@@ -379,9 +392,26 @@ def save_csv(
     np.savetxt(path, data, delimiter=",", header=header, comments="")
 
 
-def main():
-    print(f"Modelo Fossen 9-param cargado desde: {MODEL_JSON_PATH}")
-    print(f"Curva de propulsores y posiciones cargadas desde: {THRUSTERS_JSON_PATH}")
+def run_single_scenario(
+    scenario_label,
+    disturbance_fun,
+    csv_path,
+    figures_dir,
+    animation_path,
+):
+    """Ejecuta un escenario de simulacion y guarda CSV, figuras PNG y animacion GIF."""
+    print(f"\n============================================================")
+    print(f"Ejecutando escenario: {scenario_label}")
+    dist_info = getattr(disturbance_fun, "info", None)
+    if dist_info is not None:
+        print(
+            f"  Corriente de agua inercial: Magnitude: {dist_info['magnitude']:.0f} N, "
+            f"Angle: {dist_info['direction_deg']:.0f} deg "
+            f"(Fx={dist_info['Fx_inertial']:.2f} N, Fy={dist_info['Fy_inertial']:.2f} N)"
+        )
+    else:
+        print("  Corriente de agua: Ninguna (Ideal)")
+    print(f"============================================================")
 
     t_final = FIGURE_EIGHT_PERIOD * FIGURE_EIGHT_LAPS
     nominal_controller = smc_figure_eight(
@@ -392,7 +422,6 @@ def main():
         params=PARAMS,
     )
     state0 = figure_eight_initial_state()
-    disturbance_fun = DISTURBANCE_OPTIONS[DISTURBANCE_MODE]
     obstacles = configured_obstacles(enabled=ENABLE_OBSTACLES)
     reference_governor_fun = virtual_time_governor(
         obstacles,
@@ -432,24 +461,33 @@ def main():
         reference_governor_fun=reference_governor_fun,
     )
 
-    governor_history_data = governor_history(
-        state,
-        obstacles,
-        enabled=ENABLE_REFERENCE_GOVERNOR,
-        lookahead_L=LOOKAHEAD_L,
-        margin=CBF_SAFETY_MARGIN,
-        gamma_min=REFERENCE_GAMMA_MIN,
-        h_slow=REFERENCE_GOVERNOR_H_SLOW,
-        h_stop=REFERENCE_GOVERNOR_H_STOP,
-        tau_min=REFERENCE_GAMMA_FILTER_TAU_MIN,
-        tau_max=REFERENCE_GAMMA_FILTER_TAU_MAX,
+    governor_history_data = None
+    if ENABLE_REFERENCE_GOVERNOR:
+        governor_history_data = governor_history(
+            state,
+            obstacles,
+            enabled=ENABLE_REFERENCE_GOVERNOR,
+            lookahead_L=LOOKAHEAD_L,
+            margin=CBF_SAFETY_MARGIN,
+            gamma_min=REFERENCE_GAMMA_MIN,
+            h_slow=REFERENCE_GOVERNOR_H_SLOW,
+            h_stop=REFERENCE_GOVERNOR_H_STOP,
+            tau_min=REFERENCE_GAMMA_FILTER_TAU_MIN,
+            tau_max=REFERENCE_GAMMA_FILTER_TAU_MAX,
+        )
+
+    gamma_hist = (
+        governor_history_data["gamma"]
+        if governor_history_data is not None
+        else None
     )
     controller_history = controller_output_history(
         controller,
         t,
         state,
-        gamma_history=governor_history_data["gamma"],
+        gamma_history=gamma_hist,
     )
+
     cbf_history_data = None
     if ENABLE_CBF_DIAGNOSTICS:
         cbf_history_data = cbf_history(
@@ -468,7 +506,7 @@ def main():
         )
 
     save_csv(
-        CSV_PATH,
+        csv_path,
         t,
         state,
         controller=controller,
@@ -477,7 +515,8 @@ def main():
         governor_history_data=governor_history_data,
         lookahead_L=LOOKAHEAD_L,
     )
-    print(f"Simulacion guardada en: {CSV_PATH}")
+    print(f"Simulacion guardada en: {csv_path}")
+
     plot_results(
         t,
         state,
@@ -486,23 +525,24 @@ def main():
         Tu_limits=TU_LIMITS,
         Tv_limits=TV_LIMITS,
         Tr_limits=TR_LIMITS,
+        disturbance_info=dist_info,
         disturbance_fun=disturbance_fun,
         obstacles=obstacles,
         cbf_history_data=cbf_history_data,
         governor_history_data=governor_history_data,
         lookahead_L=LOOKAHEAD_L,
-        save_dir=FIGURES_DIR,
+        save_dir=figures_dir,
         show=SHOW_PLOTS,
     )
-    print(f"Graficos guardados en: {FIGURES_DIR}")
-    for figure_path in sorted(FIGURES_DIR.glob("*.png")):
+    print(f"Graficos guardados en: {figures_dir}")
+    for figure_path in sorted(figures_dir.glob("*.png")):
         print(f" - {figure_path}")
 
     if SAVE_ANIMATION:
-        animation_path = save_simulation_animation(
+        saved_anim = save_simulation_animation(
             t,
             state,
-            output_path=ANIMATION_PATH,
+            output_path=animation_path,
             fps=ANIMATION_FPS,
             duration=ANIMATION_DURATION,
             obstacles=obstacles,
@@ -510,8 +550,38 @@ def main():
             cbf_margin=CBF_SAFETY_MARGIN,
             governor_history_data=governor_history_data,
             lookahead_L=LOOKAHEAD_L,
+            disturbance_info=dist_info,
         )
-        print(f"Animacion guardada en: {animation_path}")
+        print(f"Animacion guardada en: {saved_anim}")
+
+
+def main(include_disturbances=INCLUDE_DISTURBANCES):
+    print(f"Modelo Fossen 9-param cargado desde: {MODEL_JSON_PATH}")
+    print(f"Curva de propulsores y posiciones cargadas desde: {THRUSTERS_JSON_PATH}")
+
+    # 1. Simulacion Ideal (sin perturbaciones)
+    run_single_scenario(
+        scenario_label="Ideal (Sin Perturbaciones)",
+        disturbance_fun=no_disturbance,
+        csv_path=CSV_PATH,
+        figures_dir=FIGURES_DIR,
+        animation_path=ANIMATION_PATH,
+    )
+
+    # 2. Si la bandera include_disturbances esta activa, corre las 4 perturbaciones inerciales
+    if include_disturbances:
+        for case_key, dist_fun in INERTIAL_DISTURBANCE_CASES.items():
+            case_dir = DISTURBANCES_FIGURES_DIR / case_key
+            case_csv = case_dir / f"{case_key}.csv"
+            case_anim = case_dir / "Trayectory_animation.gif"
+            label = dist_fun.info["name"] if getattr(dist_fun, "info", None) else case_key
+            run_single_scenario(
+                scenario_label=label,
+                disturbance_fun=dist_fun,
+                csv_path=case_csv,
+                figures_dir=case_dir,
+                animation_path=case_anim,
+            )
 
 
 if __name__ == "__main__":

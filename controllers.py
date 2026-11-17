@@ -4,7 +4,7 @@ from usv_model import PARAMS, TR_LIMITS, TU_LIMITS, TV_LIMITS, allocate_thruster
 
 
 FIGURE_EIGHT_AMPLITUDE  = 15.0
-FIGURE_EIGHT_PERIOD     = 340.0      # Adaptado a la velocidad fisica maxima de PlaDyPos (X-config)
+FIGURE_EIGHT_PERIOD     = 380.0      # Permite margen de empuje para corrientes de hasta 30 N
 FIGURE_EIGHT_LAPS       = 2.0
 TRACKING_LOOKAHEAD      = 0.0        # En 3-DOF full-actuated se controla el centro (o L >= 0)
 REFERENCE_EPS           = 1e-6       # Para evitar division por cero
