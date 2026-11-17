@@ -918,6 +918,19 @@ def plot_results(
         )
 
     if obstacles:
+        for index, obstacle in enumerate(obstacles):
+            label = "CBF safety zone" if index == 0 else "_nolegend_"
+            safety_zone = Circle(
+                (obstacle.x, obstacle.y),
+                obstacle.radius + CBF_MARGIN,
+                edgecolor=(1.0, 0.55, 0.0, 0.70),
+                facecolor=(1.0, 0.85, 0.0, 0.12),
+                linestyle="--",
+                linewidth=1.3,
+                label=label,
+                zorder=1,
+            )
+            ax.add_patch(safety_zone)
         draw_obstacles(ax, obstacles)
 
     boat_length = VESSEL_SIDE_M
@@ -977,7 +990,7 @@ def plot_results(
             direction_deg=disturbance_info["direction_deg"],
         )
 
-    ax.legend(fontsize=8)
+    ax.legend(loc="upper right", fontsize=8)
 
     trajectory_fig = fig
 

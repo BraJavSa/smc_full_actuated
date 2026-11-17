@@ -63,6 +63,8 @@ CSV_PATH = DATA_DIR / "figure_eight_simulation.csv"
 FIGURES_DIR = DATA_DIR / "figures"
 ANIMATION_PATH = FIGURES_DIR / "Trayectory_animation.gif"
 DISTURBANCES_FIGURES_DIR = DATA_DIR / "figures_disturbances"
+OBSTACLES_FIGURES_DIR = DATA_DIR / "figures_obstacles"
+OBSTACLES_DISTURBANCES_FIGURES_DIR = DATA_DIR / "figures_obstacles_disturbances"
 
 DT = 0.02
 SHOW_PLOTS = False
@@ -71,12 +73,15 @@ ANIMATION_FPS = 25
 ANIMATION_DURATION = 20.0
 
 # ============================================================
-# Bandera principal de ejecucion:
-#   - INCLUDE_DISTURBANCES = False -> Corre solo la simulacion ideal (sin perturbaciones)
-#   - INCLUDE_DISTURBANCES = True  -> Corre la simulacion ideal + las 4 simulaciones
-#                                     con fuerzas constantes en el marco inercial
+# Banderas principales de ejecucion en main():
+#   - INCLUDE_DISTURBANCES : Corre las 4 simulaciones con corrientes de agua
+#                            y guarda en data/figures_disturbances/
+#   - INCLUDE_OBSTACLES    : Corre la simulacion ideal con obstaculos (CBF +
+#                            Reference Governor, sin corrientes) y guarda en
+#                            data/figures_obstacles/
 # ============================================================
 INCLUDE_DISTURBANCES = True
+INCLUDE_OBSTACLES = True
 
 ENABLE_OBSTACLES = False
 LOOKAHEAD_L = TRACKING_LOOKAHEAD
@@ -85,7 +90,7 @@ ENABLE_CBF_DIAGNOSTICS = False
 CBF_SAFETY_MARGIN = CBF_MARGIN
 CBF_RELATIVE_DEGREE_ALPHA_1 = CBF_ALPHA_1
 CBF_RELATIVE_DEGREE_ALPHA_2 = CBF_ALPHA_2
-CBF_SELECTED_BARRIER = CBF_BARRIER_ELLIPSE
+CBF_SELECTED_BARRIER = CBF_BARRIER_TYPE
 CBF_SELECTED_ELLIPSE_MAJOR_SCALE = CBF_ELLIPSE_MAJOR_SCALE
 CBF_SELECTED_ELLIPSE_MINOR_SCALE = CBF_ELLIPSE_MINOR_SCALE
 CBF_SELECTED_ELLIPSE_ANGLE_DEG = CBF_ELLIPSE_ANGLE_DEG
@@ -398,6 +403,10 @@ def run_single_scenario(
     csv_path,
     figures_dir,
     animation_path,
+    enable_obstacles=ENABLE_OBSTACLES,
+    enable_cbf_avoidance=ENABLE_CBF_AVOIDANCE,
+    enable_cbf_diagnostics=ENABLE_CBF_DIAGNOSTICS,
+    enable_reference_governor=ENABLE_REFERENCE_GOVERNOR,
 ):
     """Ejecuta un escenario de simulacion y guarda CSV, figuras PNG y animacion GIF."""
     print(f"\n============================================================")
@@ -411,6 +420,9 @@ def run_single_scenario(
         )
     else:
         print("  Corriente de agua: Ninguna (Ideal)")
+    print(
+        f"  Obstaculos: {'Activos (CBF + Governor)' if enable_obstacles else 'Inactivos'}"
+    )
     print(f"============================================================")
 
     t_final = FIGURE_EIGHT_PERIOD * FIGURE_EIGHT_LAPS
@@ -422,10 +434,10 @@ def run_single_scenario(
         params=PARAMS,
     )
     state0 = figure_eight_initial_state()
-    obstacles = configured_obstacles(enabled=ENABLE_OBSTACLES)
+    obstacles = configured_obstacles(enabled=enable_obstacles)
     reference_governor_fun = virtual_time_governor(
         obstacles,
-        enabled=ENABLE_REFERENCE_GOVERNOR,
+        enabled=enable_reference_governor,
         lookahead_L=LOOKAHEAD_L,
         margin=CBF_SAFETY_MARGIN,
         gamma_min=REFERENCE_GAMMA_MIN,
@@ -437,7 +449,7 @@ def run_single_scenario(
     controller = cbf_filtered_controller(
         nominal_controller,
         obstacles,
-        enabled=ENABLE_CBF_AVOIDANCE,
+        enabled=enable_cbf_avoidance,
         lookahead_L=LOOKAHEAD_L,
         alpha_1=CBF_RELATIVE_DEGREE_ALPHA_1,
         alpha_2=CBF_RELATIVE_DEGREE_ALPHA_2,
@@ -448,7 +460,7 @@ def run_single_scenario(
         ellipse_angle_deg=CBF_SELECTED_ELLIPSE_ANGLE_DEG,
     )
 
-    if ENABLE_REFERENCE_GOVERNOR:
+    if enable_reference_governor:
         state0 = np.concatenate([state0, [0.0, 1.0]])
 
     t, state = simulate(
@@ -462,11 +474,11 @@ def run_single_scenario(
     )
 
     governor_history_data = None
-    if ENABLE_REFERENCE_GOVERNOR:
+    if enable_reference_governor:
         governor_history_data = governor_history(
             state,
             obstacles,
-            enabled=ENABLE_REFERENCE_GOVERNOR,
+            enabled=enable_reference_governor,
             lookahead_L=LOOKAHEAD_L,
             margin=CBF_SAFETY_MARGIN,
             gamma_min=REFERENCE_GAMMA_MIN,
@@ -489,7 +501,7 @@ def run_single_scenario(
     )
 
     cbf_history_data = None
-    if ENABLE_CBF_DIAGNOSTICS:
+    if enable_cbf_diagnostics:
         cbf_history_data = cbf_history(
             t,
             state,
@@ -555,20 +567,27 @@ def run_single_scenario(
         print(f"Animacion guardada en: {saved_anim}")
 
 
-def main(include_disturbances=INCLUDE_DISTURBANCES):
+def main(
+    include_disturbances=INCLUDE_DISTURBANCES,
+    include_obstacles=INCLUDE_OBSTACLES,
+):
     print(f"Modelo Fossen 9-param cargado desde: {MODEL_JSON_PATH}")
     print(f"Curva de propulsores y posiciones cargadas desde: {THRUSTERS_JSON_PATH}")
 
-    # 1. Simulacion Ideal (sin perturbaciones)
+    # 1. Simulacion Ideal (sin corrientes ni obstaculos)
     run_single_scenario(
-        scenario_label="Ideal (Sin Perturbaciones)",
+        scenario_label="Ideal (Sin Corrientes ni Obstaculos)",
         disturbance_fun=no_disturbance,
         csv_path=CSV_PATH,
         figures_dir=FIGURES_DIR,
         animation_path=ANIMATION_PATH,
+        enable_obstacles=False,
+        enable_cbf_avoidance=False,
+        enable_cbf_diagnostics=False,
+        enable_reference_governor=False,
     )
 
-    # 2. Si la bandera include_disturbances esta activa, corre las 4 perturbaciones inerciales
+    # 2. Si INCLUDE_DISTURBANCES es True: corre las 4 corrientes de agua (sin obstaculos)
     if include_disturbances:
         for case_key, dist_fun in INERTIAL_DISTURBANCE_CASES.items():
             case_dir = DISTURBANCES_FIGURES_DIR / case_key
@@ -581,6 +600,47 @@ def main(include_disturbances=INCLUDE_DISTURBANCES):
                 csv_path=case_csv,
                 figures_dir=case_dir,
                 animation_path=case_anim,
+                enable_obstacles=False,
+                enable_cbf_avoidance=False,
+                enable_cbf_diagnostics=False,
+                enable_reference_governor=False,
+            )
+
+    # 3. Si INCLUDE_OBSTACLES es True: corre la simulacion ideal con obstaculos (CBF + Governor)
+    if include_obstacles:
+        obs_csv = OBSTACLES_FIGURES_DIR / "figure_eight_obstacles.csv"
+        obs_anim = OBSTACLES_FIGURES_DIR / "Trayectory_animation.gif"
+        run_single_scenario(
+            scenario_label="Ideal con Obstaculos (CBF + Reference Governor, Sin Corrientes)",
+            disturbance_fun=no_disturbance,
+            csv_path=obs_csv,
+            figures_dir=OBSTACLES_FIGURES_DIR,
+            animation_path=obs_anim,
+            enable_obstacles=True,
+            enable_cbf_avoidance=True,
+            enable_cbf_diagnostics=True,
+            enable_reference_governor=True,
+        )
+
+    # 4. Si AMBAS banderas (INCLUDE_DISTURBANCES e INCLUDE_OBSTACLES) son True:
+    #    corre las 4 corrientes de agua CON obstaculos (CBF + Governor) en una carpeta nueva
+    if include_disturbances and include_obstacles:
+        for case_key, dist_fun in INERTIAL_DISTURBANCE_CASES.items():
+            case_dir = OBSTACLES_DISTURBANCES_FIGURES_DIR / case_key
+            case_csv = case_dir / f"{case_key}_obstacles.csv"
+            case_anim = case_dir / "Trayectory_animation.gif"
+            base_label = dist_fun.info["name"] if getattr(dist_fun, "info", None) else case_key
+            label = f"{base_label} + Obstaculos (CBF + Governor)"
+            run_single_scenario(
+                scenario_label=label,
+                disturbance_fun=dist_fun,
+                csv_path=case_csv,
+                figures_dir=case_dir,
+                animation_path=case_anim,
+                enable_obstacles=True,
+                enable_cbf_avoidance=True,
+                enable_cbf_diagnostics=True,
+                enable_reference_governor=True,
             )
 
 
