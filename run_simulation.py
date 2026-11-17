@@ -19,11 +19,16 @@ from controllers import (
     FIGURE_EIGHT_LAPS,
     FIGURE_EIGHT_PERIOD,
     TRACKING_LOOKAHEAD,
+    TRAJECTORY_CLOVER,
+    TRAJECTORY_FIGURE_EIGHT,
+    TRAJECTORY_SPIRAL,
     figure_eight_initial_state,
     figure_eight_lookahead_reference,
     figure_eight_reference,
     lookahead_point_from_state,
+    set_active_trajectory,
     smc_figure_eight,
+    trajectory_duration,
 )
 from disturbances import (
     INERTIAL_DISTURBANCE_CASES,
@@ -74,12 +79,16 @@ ANIMATION_DURATION = 20.0
 
 # ============================================================
 # Banderas principales de ejecucion en main():
+#   - TRAJECTORY_TYPE      : Selecciona la trayectoria a ejecutar:
+#                            "figure_eight" (8 de Lemniscata),
+#                            "spiral"       (Espiral de Arquimedes),
+#                            "clover"       (Trebol de 3 petalos / Rosa polar),
+#                            "all"          (Ejecuta las 3 trayectorias en sus carpetas)
 #   - INCLUDE_DISTURBANCES : Corre las 4 simulaciones con corrientes de agua
-#                            y guarda en data/figures_disturbances/
-#   - INCLUDE_OBSTACLES    : Corre la simulacion ideal con obstaculos (CBF +
-#                            Reference Governor, sin corrientes) y guarda en
-#                            data/figures_obstacles/
+#   - INCLUDE_OBSTACLES    : Corre la simulacion con obstaculos (CBF + Governor)
+#                            (Si ambas son True, tambien corre obstaculos + corrientes)
 # ============================================================
+TRAJECTORY_TYPE = "all"
 INCLUDE_DISTURBANCES = True
 INCLUDE_OBSTACLES = True
 
@@ -130,6 +139,36 @@ DISTURBANCE_OPTIONS = {
     ),
 }
 DISTURBANCE_MODE = "none"
+
+
+def get_trajectory_paths(trajectory_type):
+    """
+    Devuelve las rutas de salida (CSV y carpetas de figuras) para cada trayectoria:
+      - 'figure_eight' -> usa directamente data/figures*, conservando la estructura original
+      - 'spiral'       -> usa data/trajectory_spiral/figures*
+      - 'clover'       -> usa data/trajectory_clover/figures*
+    """
+    key = str(trajectory_type).strip().lower()
+    if key == TRAJECTORY_FIGURE_EIGHT:
+        base_dir = DATA_DIR
+        csv_name = "figure_eight_simulation.csv"
+        obs_csv_name = "figure_eight_obstacles.csv"
+    else:
+        base_dir = DATA_DIR / f"trajectory_{key}"
+        csv_name = f"{key}_simulation.csv"
+        obs_csv_name = f"{key}_obstacles.csv"
+
+    return {
+        "base_dir": base_dir,
+        "ideal_csv": base_dir / csv_name,
+        "ideal_figures": base_dir / "figures",
+        "ideal_anim": (base_dir / "figures") / "Trayectory_animation.gif",
+        "disturbances_dir": base_dir / "figures_disturbances",
+        "obstacles_dir": base_dir / "figures_obstacles",
+        "obstacles_csv": (base_dir / "figures_obstacles") / obs_csv_name,
+        "obstacles_anim": (base_dir / "figures_obstacles") / "Trayectory_animation.gif",
+        "obstacles_disturbances_dir": base_dir / "figures_obstacles_disturbances",
+    }
 
 
 def state_with_reference_rate(state_i, gamma=None):
@@ -403,14 +442,17 @@ def run_single_scenario(
     csv_path,
     figures_dir,
     animation_path,
+    trajectory_type=TRAJECTORY_FIGURE_EIGHT,
     enable_obstacles=ENABLE_OBSTACLES,
     enable_cbf_avoidance=ENABLE_CBF_AVOIDANCE,
     enable_cbf_diagnostics=ENABLE_CBF_DIAGNOSTICS,
     enable_reference_governor=ENABLE_REFERENCE_GOVERNOR,
 ):
     """Ejecuta un escenario de simulacion y guarda CSV, figuras PNG y animacion GIF."""
+    set_active_trajectory(trajectory_type)
+
     print(f"\n============================================================")
-    print(f"Ejecutando escenario: {scenario_label}")
+    print(f"Trayectoria: {trajectory_type.upper()} | Escenario: {scenario_label}")
     dist_info = getattr(disturbance_fun, "info", None)
     if dist_info is not None:
         print(
@@ -425,16 +467,20 @@ def run_single_scenario(
     )
     print(f"============================================================")
 
-    t_final = FIGURE_EIGHT_PERIOD * FIGURE_EIGHT_LAPS
+    t_final = trajectory_duration(trajectory_type)
     nominal_controller = smc_figure_eight(
         Tu_limits=TU_LIMITS,
         Tv_limits=TV_LIMITS,
         Tr_limits=TR_LIMITS,
         lookahead_L=LOOKAHEAD_L,
         params=PARAMS,
+        trajectory_type=trajectory_type,
     )
-    state0 = figure_eight_initial_state()
-    obstacles = configured_obstacles(enabled=enable_obstacles)
+    state0 = figure_eight_initial_state(trajectory_type=trajectory_type)
+    obstacles = configured_obstacles(
+        enabled=enable_obstacles,
+        trajectory_type=trajectory_type,
+    )
     reference_governor_fun = virtual_time_governor(
         obstacles,
         enabled=enable_reference_governor,
@@ -567,20 +613,22 @@ def run_single_scenario(
         print(f"Animacion guardada en: {saved_anim}")
 
 
-def main(
+def run_trajectory_suite(
+    trajectory_type,
     include_disturbances=INCLUDE_DISTURBANCES,
     include_obstacles=INCLUDE_OBSTACLES,
 ):
-    print(f"Modelo Fossen 9-param cargado desde: {MODEL_JSON_PATH}")
-    print(f"Curva de propulsores y posiciones cargadas desde: {THRUSTERS_JSON_PATH}")
+    """Ejecuta todos los escenarios configurados para una trayectoria dada."""
+    paths = get_trajectory_paths(trajectory_type)
 
     # 1. Simulacion Ideal (sin corrientes ni obstaculos)
     run_single_scenario(
         scenario_label="Ideal (Sin Corrientes ni Obstaculos)",
         disturbance_fun=no_disturbance,
-        csv_path=CSV_PATH,
-        figures_dir=FIGURES_DIR,
-        animation_path=ANIMATION_PATH,
+        csv_path=paths["ideal_csv"],
+        figures_dir=paths["ideal_figures"],
+        animation_path=paths["ideal_anim"],
+        trajectory_type=trajectory_type,
         enable_obstacles=False,
         enable_cbf_avoidance=False,
         enable_cbf_diagnostics=False,
@@ -590,7 +638,7 @@ def main(
     # 2. Si INCLUDE_DISTURBANCES es True: corre las 4 corrientes de agua (sin obstaculos)
     if include_disturbances:
         for case_key, dist_fun in INERTIAL_DISTURBANCE_CASES.items():
-            case_dir = DISTURBANCES_FIGURES_DIR / case_key
+            case_dir = paths["disturbances_dir"] / case_key
             case_csv = case_dir / f"{case_key}.csv"
             case_anim = case_dir / "Trayectory_animation.gif"
             label = dist_fun.info["name"] if getattr(dist_fun, "info", None) else case_key
@@ -600,6 +648,7 @@ def main(
                 csv_path=case_csv,
                 figures_dir=case_dir,
                 animation_path=case_anim,
+                trajectory_type=trajectory_type,
                 enable_obstacles=False,
                 enable_cbf_avoidance=False,
                 enable_cbf_diagnostics=False,
@@ -608,25 +657,23 @@ def main(
 
     # 3. Si INCLUDE_OBSTACLES es True: corre la simulacion ideal con obstaculos (CBF + Governor)
     if include_obstacles:
-        obs_csv = OBSTACLES_FIGURES_DIR / "figure_eight_obstacles.csv"
-        obs_anim = OBSTACLES_FIGURES_DIR / "Trayectory_animation.gif"
         run_single_scenario(
             scenario_label="Ideal con Obstaculos (CBF + Reference Governor, Sin Corrientes)",
             disturbance_fun=no_disturbance,
-            csv_path=obs_csv,
-            figures_dir=OBSTACLES_FIGURES_DIR,
-            animation_path=obs_anim,
+            csv_path=paths["obstacles_csv"],
+            figures_dir=paths["obstacles_dir"],
+            animation_path=paths["obstacles_anim"],
+            trajectory_type=trajectory_type,
             enable_obstacles=True,
             enable_cbf_avoidance=True,
             enable_cbf_diagnostics=True,
             enable_reference_governor=True,
         )
 
-    # 4. Si AMBAS banderas (INCLUDE_DISTURBANCES e INCLUDE_OBSTACLES) son True:
-    #    corre las 4 corrientes de agua CON obstaculos (CBF + Governor) en una carpeta nueva
+    # 4. Si AMBAS banderas son True: corre las 4 corrientes de agua CON obstaculos (CBF + Governor)
     if include_disturbances and include_obstacles:
         for case_key, dist_fun in INERTIAL_DISTURBANCE_CASES.items():
-            case_dir = OBSTACLES_DISTURBANCES_FIGURES_DIR / case_key
+            case_dir = paths["obstacles_disturbances_dir"] / case_key
             case_csv = case_dir / f"{case_key}_obstacles.csv"
             case_anim = case_dir / "Trayectory_animation.gif"
             base_label = dist_fun.info["name"] if getattr(dist_fun, "info", None) else case_key
@@ -637,11 +684,38 @@ def main(
                 csv_path=case_csv,
                 figures_dir=case_dir,
                 animation_path=case_anim,
+                trajectory_type=trajectory_type,
                 enable_obstacles=True,
                 enable_cbf_avoidance=True,
                 enable_cbf_diagnostics=True,
                 enable_reference_governor=True,
             )
+
+
+def main(
+    trajectory_type=TRAJECTORY_TYPE,
+    include_disturbances=INCLUDE_DISTURBANCES,
+    include_obstacles=INCLUDE_OBSTACLES,
+):
+    print(f"Modelo Fossen 9-param cargado desde: {MODEL_JSON_PATH}")
+    print(f"Curva de propulsores y posiciones cargadas desde: {THRUSTERS_JSON_PATH}")
+
+    mode = str(trajectory_type).strip().lower()
+    if mode == "all":
+        trajectories = (
+            TRAJECTORY_FIGURE_EIGHT,
+            TRAJECTORY_SPIRAL,
+            TRAJECTORY_CLOVER,
+        )
+    else:
+        trajectories = (mode,)
+
+    for traj in trajectories:
+        run_trajectory_suite(
+            traj,
+            include_disturbances=include_disturbances,
+            include_obstacles=include_obstacles,
+        )
 
 
 if __name__ == "__main__":

@@ -12,7 +12,10 @@ from controllers import (
     TRACKING_LOOKAHEAD,
     figure_eight_lookahead_reference,
     figure_eight_reference,
+    get_active_trajectory,
     lookahead_point_from_state,
+    trajectory_label,
+    trajectory_reference_curve_duration,
 )
 from usv_model import THRUSTER_FWD_MAX, THRUSTER_REV_MAX, THRUSTERS_CONFIG
 
@@ -278,9 +281,9 @@ def draw_disturbance_arrow(ax, magnitude, direction_deg):
     box_x = x_limits[0] + 0.03 * x_span
     box_y = y_limits[0] + 0.03 * y_span
 
-    # Punto central de la flecha ligeramente a la derecha del recuadro de texto
-    arrow_cx = x_limits[0] + 0.28 * x_span
-    arrow_cy = y_limits[0] + 0.095 * y_span
+    # Punto central de la flecha a la derecha del recuadro de texto
+    arrow_cx = x_limits[0] + 0.34 * x_span
+    arrow_cy = y_limits[0] + 0.085 * y_span
     x0 = arrow_cx - 0.5 * dx
     y0 = arrow_cy - 0.5 * dy
 
@@ -628,7 +631,8 @@ def save_simulation_animation(
         lookahead_L,
         time_scale=reference_rate,
     )
-    t_one_lap = np.linspace(0.0, FIGURE_EIGHT_PERIOD, 600)
+    ref_curve_duration = trajectory_reference_curve_duration()
+    t_one_lap = np.linspace(0.0, ref_curve_duration, 700)
     x_path_ref, y_path_ref, _, _, _, _ = figure_eight_reference(t_one_lap)
     p_s_path_ref, _, _, _ = figure_eight_lookahead_reference(t_one_lap, lookahead_L)
 
@@ -679,7 +683,7 @@ def save_simulation_animation(
             color="0.25",
             alpha=0.85,
             linewidth=1.3,
-            label="figure-eight reference",
+            label=trajectory_label(),
             zorder=3,
         )
 
@@ -890,7 +894,8 @@ def plot_results(
     ax.plot(x, y, color="tab:blue", label="USV path", linewidth=1.8, zorder=2)
 
     if show_reference:
-        t_one_lap = np.linspace(0.0, FIGURE_EIGHT_PERIOD, 600)
+        ref_curve_duration = trajectory_reference_curve_duration()
+        t_one_lap = np.linspace(0.0, ref_curve_duration, 700)
         x_ref, y_ref, _, _, _, _ = figure_eight_reference(t_one_lap)
         x_ref_progress, y_ref_progress, _, _, _, _ = figure_eight_reference(
             reference_time
@@ -903,7 +908,7 @@ def plot_results(
             color="0.20",
             alpha=0.90,
             linewidth=1.3,
-            label="figure-eight reference",
+            label=trajectory_label(),
             zorder=3,
         )
         ax.scatter(
@@ -936,8 +941,11 @@ def plot_results(
     boat_length = VESSEL_SIDE_M
     boat_width = VESSEL_SIDE_M
     sample_count = min(10, len(x))
-    # Distribuir las muestras sobre una vuelta para que no se superpongan entre vueltas
-    one_lap_end = max(1, len(x) // 2)
+    active_traj = get_active_trajectory()
+    if active_traj == "figure_eight":
+        one_lap_end = max(1, len(x) // 2)
+    else:
+        one_lap_end = len(x)
     sample_indices = np.linspace(0, one_lap_end, sample_count, endpoint=False, dtype=int)
 
     for index in sample_indices[1:]:
